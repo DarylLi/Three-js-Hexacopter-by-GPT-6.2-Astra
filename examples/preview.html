@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#e8ebea">
+  <link rel="icon" href="data:,">
+  <title>六旋翼模型预览</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body, main { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { background: #e8ebea; color: #263038; font: 14px/1.4 Inter, "Microsoft YaHei", sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    nav { position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; gap: 4px; align-items: center; background: #fbfcfbf5; padding: 5px; border: 1px solid #c4cbc9; border-radius: 12px; box-shadow: 0 3px 14px #15272212; }
+    button { border: 0; background: transparent; padding: 8px 15px; border-radius: 7px; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+    button:hover { background: #e5e9e7; }
+    button[aria-pressed=true] { background: #263038; color: white; }
+    button:focus-visible { outline: 2px solid #a74716; outline-offset: 2px; }
+    .hint { padding: 0 12px; border-left: 1px solid #cbd1ce; font-size: 12px; white-space: nowrap; color: #52605e; }
+    #status { position: fixed; inset: 42% 16px auto; text-align: center; pointer-events: none; }
+    @media (max-width: 520px), (pointer: coarse) { .hint { display: none; } }
+  </style>
+  <script type="importmap">{"imports":{"three":"/three.module.js"}}</script>
+</head>
+<body>
+  <main aria-label="六旋翼三维模型"></main>
+  <div id="status" role="status">正在加载三维模型…</div>
+  <nav aria-label="模型预览控制">
+    <button data-view="whole" aria-pressed="true">整机</button>
+    <button data-view="motor" aria-pressed="false">电机</button>
+    <button data-view="gimbal" aria-pressed="false">云台</button>
+    <button type="button" id="rotor-playback">暂停螺旋桨</button>
+    <span class="hint">拖动旋转 · 滚轮缩放</span>
+  </nav>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from '/orbit.js';
+    import { RoomEnvironment } from '/room.js';
+    import { createHexacopter } from '/hexacopter.mjs';
+
+    function launch() {
+      const host = document.querySelector('main');
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+      renderer.toneMapping = THREE.NeutralToneMapping;
+      renderer.toneMappingExposure = 0.94;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.VSMShadowMap;
+      host.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xe8ebea);
+      const studio = new RoomEnvironment();
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const reflections = pmrem.fromScene(studio, 0.04);
+      scene.environment = reflections.texture;
+      scene.environmentIntensity = 0.69;
+      pmrem.dispose();
+      studio.dispose();
+      const key = new THREE.DirectionalLight(0xfff5e6, 1.46);
+      key.position.set(-0.9, 3, 0.85);
+      key.castShadow = true;
+      key.shadow.mapSize.set(1024, 1024);
+      Object.assign(key.shadow.camera, { left: -0.9, right: 0.9, top: 0.9, bottom: -0.9, near: 0.2, far: 5 });
+      key.shadow.camera.updateProjectionMatrix();
+      Object.assign(key.shadow, { bias: -0.00011, normalBias: 0.0005, radius: 7, blurSamples: 12 });
+      const rim = new THREE.DirectionalLight(0xddeaff, 1.15);
+      rim.position.set(0.8, 1.15, -1.7);
+      scene.add(key, rim, new THREE.HemisphereLight(0xf1f5ff, 0x8d938b, 0.62));
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 20),
+        new THREE.ShadowMaterial({ color: 0x40515b, opacity: 0.14 }));
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.0003;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const model = createHexacopter();
+      scene.add(model);
+      scene.updateMatrixWorld(true);
+      const camera = new THREE.PerspectiveCamera(32, 1, 0.002, 40);
+      const orbit = new OrbitControls(camera, renderer.domElement);
+      orbit.minDistance = 0.032;
+      orbit.maxDistance = 20;
+      orbit.zoomSpeed = 0.85;
+      const render = () => renderer.render(scene, camera);
+      const mixer = new THREE.AnimationMixer(model);
+      const spin = mixer.clipAction(THREE.AnimationClip.findByName(model.animations, 'rotor-spin')).play();
+      const playback = document.getElementById('rotor-playback');
+      let previousFrame = null;
+      function animate(now) {
+        if (previousFrame !== null) mixer.update((now - previousFrame) / 1000);
+        previousFrame = now;
+        render();
+      }
+      function scheduleAnimation() {
+        previousFrame = null;
+        renderer.setAnimationLoop(spin.paused || document.hidden ? null : animate);
+      }
+      playback.addEventListener('click', () => {
+        spin.paused = !spin.paused;
+        playback.textContent = spin.paused ? '转动螺旋桨' : '暂停螺旋桨';
+        scheduleAnimation();
+      });
+      document.addEventListener('visibilitychange', scheduleAnimation);
+      const center = new THREE.Vector3(0, 0.18, 0);
+      const motor = model.getObjectByName('motor-2').getWorldPosition(new THREE.Vector3());
+      motor.y += 0.015;
+      const gimbal = model.getObjectByName('gimbal-pitch').getWorldPosition(new THREE.Vector3());
+      const views = {
+        whole: { target: center, direction: [0.78, 1.08, 1.68], width: 1.45, height: 0.81 },
+        motor: { target: motor, direction: [0.15, 0.23, 0.49], width: 0.20, height: 0.13 },
+        gimbal: { target: gimbal, direction: [0.17, 0.11, 1], width: 0.20, height: 0.175 },
+      };
+      let selected = 'whole';
+      function setView(name) {
+        selected = name;
+        const view = views[name];
+        const span = Math.max(view.width / camera.aspect, view.height);
+        const distance = span / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+        orbit.target.copy(view.target);
+        camera.position.fromArray(view.direction).normalize().multiplyScalar(distance).add(orbit.target);
+        orbit.update();
+        render();
+        for (const button of document.querySelectorAll('[data-view]')) {
+          button.setAttribute('aria-pressed', String(button.dataset.view === name));
+        }
+      }
+      function layout() {
+        camera.aspect = host.clientWidth / host.clientHeight;
+        renderer.setSize(host.clientWidth, host.clientHeight, false);
+        camera.updateProjectionMatrix();
+        setView(selected);
+      }
+      document.querySelector('nav').addEventListener('click', event => {
+        const button = event.target.closest('button[data-view]');
+        if (button) setView(button.dataset.view);
+      });
+      orbit.addEventListener('change', () => { if (spin.paused) render(); });
+      window.addEventListener('resize', layout);
+      layout();
+      scheduleAnimation();
+      document.getElementById('status').hidden = true;
+    }
+    try { launch(); }
+    catch (error) {
+      document.getElementById('status').textContent = '三维预览未能加载，请在支持 WebGL 2 的浏览器中打开。';
+      console.error(error);
+    }
+  </script>
+</body>
+</html>

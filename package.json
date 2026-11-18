@@ -1,0 +1,12 @@
+{
+  "name": "three-js-hexacopter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node examples/serve.mjs"
+  },
+  "dependencies": {
+    "three": "0.180.0"
+  }
+}
